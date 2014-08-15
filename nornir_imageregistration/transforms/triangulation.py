@@ -13,10 +13,31 @@ from scipy.interpolate import griddata
 from scipy.spatial import *
 
 from nornir_imageregistration.transforms.utils import InvalidIndicies
+import nornir_imageregistration.spatial as spatial
 import numpy as np
 
 from . import utils
 from .base import *
+
+
+def AddTransforms(BToC_Unaltered_Transform, AToB_mapped_Transform, create_copy=True):
+    '''Takes the control points of a mapping from A to B and returns control points mapping from A to C
+    :param bool create_copy: True if a new transform should be returned.  If false replace the passed A to B transform points.  Default is True.  
+    :return: ndarray of points that can be assigned as control points for a transform'''
+    
+    mappedControlPoints = AToB_mapped_Transform.FixedPoints
+    txMappedControlPoints = BToC_Unaltered_Transform.Transform(mappedControlPoints)
+    
+    AToC_pointPairs = np.hstack( (txMappedControlPoints, AToB_mapped_Transform.WarpedPoints) )
+    
+    newTransform = None
+    if create_copy:
+        newTransform = copy.deepcopy(AToB_mapped_Transform)
+        newTransform.points = AToC_pointPairs
+        return newTransform
+    else:
+        AToB_mapped_Transform.points = AToC_pointPairs
+        return AToB_mapped_Transform 
 
 
 class Triangulation(Base):
@@ -27,12 +48,11 @@ class Triangulation(Base):
 
     def __getstate__(self):
         odict = {}
-
         odict['_points'] = self._points
 
         return odict
 
-    def __setstate__(self, dictionary):
+    def __setstate__(self, dictionary):         
         self.__dict__.update(dictionary)
         self.OnChangeEventListeners = []
         self.OnTransformChanged()
@@ -85,20 +105,14 @@ class Triangulation(Base):
             self._warpedtri = Delaunay(self.WarpedPoints)
 
         return self._warpedtri
+     
+    def AddTransform(self, mappedTransform, create_copy=True):
+        '''Take the control points of the mapped transform and map them through our transform so the control points are in our controlpoint space''' 
+        return AddTransforms(self, mappedTransform, create_copy)
 
-    def AddTransform(self, mappedTransform):
-        '''Take the control points of the mapped transform and map them through our transform so the control points are in our controlpoint space'''
-        mappedControlPoints = mappedTransform.FixedPoints
-        txMappedControlPoints = self.Transform(mappedControlPoints)
-
-        pointPairs = np.hstack((txMappedControlPoints, mappedTransform.WarpedPoints))
-
-        newTransform = copy.deepcopy(mappedTransform)
-        newTransform.points = pointPairs
-
-        return newTransform
 
     def Transform(self, points, **kwargs):
+        '''Map points from the fixed space to the warped space'''
         transPoints = None
 
         method = kwargs.get('method', 'linear')
@@ -113,6 +127,7 @@ class Triangulation(Base):
         return transPoints
 
     def InverseTransform(self, points, **kwargs):
+        '''Map points from the warped space to the fixed space'''
         transPoints = None
 
         method = kwargs.get('method', 'linear')
@@ -201,6 +216,8 @@ class Triangulation(Base):
         self._warpedtri = None
         self._WarpedKDTree = None
         self._FixedKDTree = None
+        self._FixedBoundingBox = None
+        self._MappedBoundingBox = None
 
     def NearestFixedPoint(self, points):
         '''Return the fixed points nearest to the query points'''
@@ -258,24 +275,20 @@ class Triangulation(Base):
         '''
         :return: (minY, minX, maxY, maxX)
         '''
-        cp = self.FixedPoints
+        if self._FixedBoundingBox is None:
+            self._FixedBoundingBox = spatial.BoundsArrayFromPoints(self.FixedPoints)
 
-        (minY, minX) = np.min(cp, 0)
-        (maxY, maxX) = np.max(cp, 0)
-
-        return (minY, minX, maxY, maxX)
+        return self._FixedBoundingBox
 
     @property
     def MappedBoundingBox(self):
         '''
         :return: (minY, minX, maxY, maxX)
         '''
-        cp = self.WarpedPoints
+        if self._MappedBoundingBox is None:
+            self._MappedBoundingBox = spatial.BoundsArrayFromPoints(self.WarpedPoints)
 
-        (minY, minX) = np.min(cp, 0)
-        (maxY, maxX) = np.max(cp, 0)
-
-        return (minY, minX, maxY, maxX)
+        return self._MappedBoundingBox
 
     @property
     def FixedBoundingBoxWidth(self):
@@ -358,6 +371,9 @@ class Triangulation(Base):
         self._warpedtri = None
         self._WarpedKDTree = None
         self._FixedKDTree = None
+        self._FixedBoundingBox = None
+        self._MappedBoundingBox = None 
+        
 
     @classmethod
     def load(cls, variableParams, fixedParams):

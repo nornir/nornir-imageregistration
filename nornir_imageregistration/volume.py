@@ -41,6 +41,13 @@ class Volume(object):
         self._SectionToVolumeTransforms = dict()
 
     def AddSection(self, SectionID, transform):
+        '''Adds a transform for a section, raise ValueError if it exists'''
+        if SectionID in self._SectionToVolumeTransforms:
+            raise ValueError("Key %s already in _SectionToVolumeTransforms" % (str(SectionID)))
+        
+        self._SectionToVolumeTransforms[SectionID] = transform
+        
+    def AddOrUpdateSection(self, SectionID, transform):
         '''Adds a transform for a section, replacing it if it already exists'''
         self._SectionToVolumeTransforms[SectionID] = transform
 
@@ -95,6 +102,9 @@ class Volume(object):
     def VolumeBounds(self):
         # Boundaries of the volume based on locations where sections will map points into the volume
         return tutils.FixedBoundingBox(self.SectionToVolumeTransforms.values())
+    
+    def IsOriginAtZero(self):
+        return tutils.IsOriginAtZero(self._SectionToVolumeTransforms.values())
 
     def TranslateToZeroOrigin(self):
         '''Ensure that the transforms in the mosaic do not map to negative coordinates'''
