@@ -99,23 +99,27 @@ def CompositeImageWithZBuffer(FullImage, FullZBuffer, SubImage, SubZBuffer, offs
     minY = int(offset[0])
     maxX = int(minX + SubImage.shape[1])
     maxY = int(minY + SubImage.shape[0])
-
-    tempFullImage = FullImage[minY:maxY, minX:maxX]
-    tempZBuffer = FullZBuffer[minY:maxY, minX:maxX]
-
-    if(tempZBuffer.shape != SubZBuffer.shape):
+    
+    if((np.array([maxY-minY,maxX-minX]) != SubZBuffer.shape).any()):
         raise ValueError("Buffers do not have the same dimensions")
-
-    iUpdate = tempZBuffer > SubZBuffer
-
-    tempFullImage[iUpdate] = SubImage[iUpdate]
-    tempZBuffer[iUpdate] = SubZBuffer[iUpdate]
-
-    # FullImage[minY:maxY, minX:maxX] += SubImage
-    FullImage[minY:maxY, minX:maxX] = tempFullImage
-    FullZBuffer[minY:maxY, minX:maxX] = tempZBuffer
-
-    return (FullImage, FullZBuffer)
+    
+    iUpdate = FullZBuffer[minY:maxY, minX:maxX] > SubZBuffer
+    FullImage[minY:maxY, minX:maxX][iUpdate] = SubImage[iUpdate]
+    FullZBuffer[minY:maxY, minX:maxX][iUpdate] = SubZBuffer[iUpdate]
+    
+# 
+#     tempFullImage = FullImage[minY:maxY, minX:maxX]
+#     tempZBuffer = FullZBuffer[minY:maxY, minX:maxX]    
+# 
+#     iUpdate = tempZBuffer > SubZBuffer
+# 
+#     tempFullImage[iUpdate] = SubImage[iUpdate]
+#     tempZBuffer[iUpdate] = SubZBuffer[iUpdate]
+# 
+#     # FullImage[minY:maxY, minX:maxX] += SubImage
+#     FullImage[minY:maxY, minX:maxX] = tempFullImage
+#     FullZBuffer[minY:maxY, minX:maxX] = tempZBuffer
+ 
 
 
 def distFunc(i, j):
@@ -270,7 +274,7 @@ def TilesToImage(transforms, imagepaths, FixedRegion=None, requiredScale=None):
         if fixedRect is None:
             (minY, minX, maxY, maxX) = transformedImageData.transform.FixedBoundingBox
 
-        (fullImage, fullImageZbuffer) = CompositeImageWithZBuffer(fullImage, fullImageZbuffer, transformedImageData.image, transformedImageData.centerDistanceImage, (np.floor(minY), np.floor(minX)))
+        CompositeImageWithZBuffer(fullImage, fullImageZbuffer, transformedImageData.image, transformedImageData.centerDistanceImage, (np.floor(minY), np.floor(minX)))
 
         del transformedImageData
 
@@ -310,7 +314,7 @@ def TilesToImageParallel(transforms, imagepaths, FixedRegion=None, requiredScale
     else:
         (fullImage, fullImageZbuffer) = __CreateOutputBufferForTransforms(transforms, requiredScale)
 
-    CheckTaskInterval = 10
+    CheckTaskInterval = 16
 
     minY = 0
     minX = 0
@@ -332,17 +336,26 @@ def TilesToImageParallel(transforms, imagepaths, FixedRegion=None, requiredScale
         if not i % CheckTaskInterval == 0:
             continue
 
-        for iTask, t in enumerate(tasks):
+        iTask = len(tasks) - 1
+        while iTask >= 0:
+            t = tasks[iTask]
             if t.iscompleted:
                 transformedImageData = t.wait_return()
-                (fullImage, fullImageZbuffer) = __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZbuffer, FixedRegion)
-                del transformedImageData
+                if transformedImageData is None:
+                    logger = logging.getLogger('TilesToImageParallel')
+                    logger.error('Convert task failed: ' + str(t))
+                else:
+                    __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZbuffer, FixedRegion)
+                    del transformedImageData
+                    
                 del tasks[iTask]
+            
+            iTask -= 1
 
     logger.info('All warps queued, integrating results into final image')
 
     while len(tasks) > 0:
-        t = tasks.pop()
+        t = tasks.pop(0)
         transformedImageData = t.wait_return()
 
         if transformedImageData is None:
@@ -350,7 +363,7 @@ def TilesToImageParallel(transforms, imagepaths, FixedRegion=None, requiredScale
             logger.error('Convert task failed: ' + str(t))
             continue
 
-        (fullImage, fullImageZbuffer) = __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZbuffer, FixedRegion)
+        __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZbuffer, FixedRegion)
         del transformedImageData
         del t
 
@@ -381,7 +394,7 @@ def __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZB
 
     # print "%g %g" % (minX, minY)
     try:
-        (fullImage, fullImageZBuffer) = CompositeImageWithZBuffer(fullImage, fullImageZBuffer, transformedImageData.image, transformedImageData.centerDistanceImage, (np.floor(minY), np.floor(minX)))
+        CompositeImageWithZBuffer(fullImage, fullImageZBuffer, transformedImageData.image, transformedImageData.centerDistanceImage, (np.floor(minY), np.floor(minX)))
     except ValueError:
         # This is frustrating and usually indicates the input transform passed to assemble mapped to negative coordinates.
         logger = logging.getLogger('TilesToImageParallel')
@@ -389,8 +402,6 @@ def __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZB
         pass
 
     transformedImageData.Clear()
-
-    return (fullImage, fullImageZBuffer)
 
 
 def TransformTile(transform, imagefullpath, distanceImage=None, requiredScale=None, FixedRegion=None):
