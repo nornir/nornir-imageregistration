@@ -105,7 +105,9 @@ def ShowGrayscale(imageList, title=None):
     :param str title: Informative title for the figure, for example expected test results
     '''
         
-    if isinstance(imageList, collections.Iterable):
+    if isinstance(imageList, np.ndarray):
+        plt.imshow(imageList, cmap=plt.gray())
+    elif isinstance(imageList, collections.Iterable):
 
         if len(imageList) == 1:
             plt.imshow(imageList[0], cmap=plt.gray(), title=title)
@@ -130,10 +132,7 @@ def ShowGrayscale(imageList, title=None):
                     else:
                         ax = axeslist[iCol]
 
-                    ax.imshow(image, cmap=plt.gray(), figure=fig)
-
-    elif isinstance(imageList, np.ndarray):
-        plt.imshow(imageList, cmap=plt.gray())
+                    ax.imshow(image, cmap=plt.gray(), figure=fig)  
     else:
         return
 
@@ -755,7 +754,7 @@ def ImagePhaseCorrelation(FixedImage, MovingImage):
     conjFFTFixed *= FFTMoving
     del FFTMoving
 
-    conjFFTFixed /= abs(conjFFTFixed)  # Numerator / Divisor
+    conjFFTFixed /= np.absolute(conjFFTFixed)  # Numerator / Divisor
 
     CorrelationImage = np.real(fftpack.irfft2(conjFFTFixed))
     del conjFFTFixed
