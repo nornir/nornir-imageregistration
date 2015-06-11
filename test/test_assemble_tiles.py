@@ -107,12 +107,14 @@ class TestMosaicAssemble(setup_imagetest.MosaicTestBase):
 
         mosaic.TranslateToZeroOrigin()
 
-        (imageKey, transform) = list(mosaic.ImageToTransform.items())[0]
+        (imageKey, transform) = sorted(list(mosaic.ImageToTransform.items()))[0]
 
         (MinY, MinX, MaxY, MaxZ) = transform.FixedBoundingBox
-
+        print("Scaled fixed region %s"  % str(transform.FixedBoundingBox))
+        
         FixedRegion = np.array([MinY + 512, MinX + 1024, MinY + 1024, MinX + 2048])
         ScaledFixedRegion = FixedRegion / self.DownsampleFromTilePath(tilesDir)
+        
 
         (tileImage, tileMask) = mosaic.AssembleTiles(tilesDir, usecluster=False, FixedRegion=FixedRegion)
         # self.assertEqual(tileImage.shape, (ScaledFixedRegion[3], ScaledFixedRegion[2]))
@@ -137,7 +139,7 @@ class TestMosaicAssemble(setup_imagetest.MosaicTestBase):
                                                     int(ScaledFixedRegion[3] - ScaledFixedRegion[1]),
                                                     int(ScaledFixedRegion[2] - ScaledFixedRegion[0]))
 
-        core.ShowGrayscale([result.image, tileImage, croppedWholeImage, wholeimage])
+        core.ShowGrayscale([result.image, tileImage, croppedWholeImage, wholeimage], title="image: %s\n%s" % (imageKey, str(transform.FixedBoundingBox)))
 
 
     def CreateAssembleOptimizedTile(self, mosaicFilePath, TilesDir):
@@ -155,10 +157,10 @@ class TestMosaicAssemble(setup_imagetest.MosaicTestBase):
         expectedScale = 1.0 / self.DownsampleFromTilePath(TilesDir)
 
         result = at.TransformTile(transform, os.path.join(TilesDir, imageKey), distanceImage=None, requiredScale=None, FixedRegion=(MinY, MinX, MaxY, MinX + 256))
-        self.assertEqual(result.image.shape, (np.ceil(transform.FixedBoundingBoxHeight * expectedScale), np.ceil(256 * expectedScale)))
+        self.assertEqual(result.image.shape, (np.ceil(transform.FixedBoundingBox.Height * expectedScale), np.ceil(256 * expectedScale)))
 
         result = at.TransformTile(transform, os.path.join(TilesDir, imageKey), distanceImage=None, requiredScale=None, FixedRegion=(MinY, MinX, MinY + 256, MaxX))
-        self.assertEqual(result.image.shape, (np.ceil(256 * expectedScale), np.ceil(transform.FixedBoundingBoxWidth * expectedScale)))
+        self.assertEqual(result.image.shape, (np.ceil(256 * expectedScale), np.ceil(transform.FixedBoundingBox.Width * expectedScale)))
 
         result = at.TransformTile(transform, os.path.join(TilesDir, imageKey), distanceImage=None, requiredScale=None, FixedRegion=(MinY + 2048, MinX + 2048, MinY + 2048 + 512, MinX + 2048 + 512))
         self.assertEqual(result.image.shape, (np.ceil(512 * expectedScale), np.ceil(512 * expectedScale)))
@@ -279,6 +281,7 @@ class IDOCTests(TestMosaicAssemble):
 
         self.CompareMosaicAsssembleAndTransformTile(mosaicFiles[0], tilesDir)
         self.CreateAssembleOptimizedTile(mosaicFiles[0], tilesDir)
+        
         
     def test_AssembleTilesIDoc_JPeg2000(self):
         '''Assemble small 256x265 tiles from a transform and image in a mosaic'''

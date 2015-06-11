@@ -30,7 +30,7 @@ class Test(setup_imagetest.ImageTestBase):
 
     def __CheckRangeForPowerOfTwo(self, overlap):
 
-         for v in range(2, 129):
+        for v in range(2, 129):
             newDim = core.NearestPowerOfTwoWithOverlap(v, overlap=overlap)
 
             logOriginalDim = math.log(v, 2)
@@ -66,29 +66,46 @@ class Test(setup_imagetest.ImageTestBase):
         r = core.ROIRange(24, 16, 5)
         self.assertIsNone(r)
         
-    def test_SaveImageJPeg2000(self):
+    def testShowGrayscale(self):
         
-        image_full_path = self.GetImagePath('0162_ds16.png')
-        image = core.LoadImage(image_full_path)
+        imageA = np.random.rand(64,64)
+        imageB = np.random.rand(64,64)
         
-        jpeg2000_full_path = os.path.join(self.TestOutputPath, '0162_ds16.jp2')
-
-        tile_dims = core.TileGridShape(image, (512,512))        
-        image_tiles = core.ImageToTiles(image, (512, 512))
+        core.ShowGrayscale(imageA, title="A single image with a title followed by a single image with no title")
+        core.ShowGrayscale(imageA, title=None)
         
-        for iY in range(0,tile_dims[0]):
-            for iX in range(0,tile_dims[1]):
-                core.SaveImage_JPeg2000_Tile(jpeg2000_full_path, image_tiles[iY,iX], tile_coord=(iX,iY), tile_dim=None)
+        core.ShowGrayscale([imageA], title="A single image in a list with a title followed by a single image with no title")
+        core.ShowGrayscale([imageA], title=None)
         
-        self.assertTrue(os.path.exists(jpeg2000_full_path), "Jpeg 2000 file does not exist")
+        core.ShowGrayscale([imageA, imageB], title="Two images in a list with a title, followed by two images with no title")
+        core.ShowGrayscale([imageA, imageB], title=None)
+        
+        
+#    def test_SaveImageJPeg2000(self):
+#        
+#         image_full_path = self.GetImagePath('0162_ds16.png')
+#         image = core.LoadImage(image_full_path)
+#         
+#         jpeg2000_full_path = os.path.join(self.TestOutputPath, '0162_ds16.jp2')
+# 
+#         tile_dims = core.TileGridShape(image, (512,512))        
+#         image_tiles = core.ImageToTiles(image, (512, 512))
+#         
+#         for iY in range(0,tile_dims[0]):
+#             for iX in range(0,tile_dims[1]):
+#                 core.SaveImage_JPeg2000_Tile(jpeg2000_full_path, image_tiles[iY,iX], tile_coord=(iX,iY), tile_dim=None)
+#         
+#         self.assertTrue(os.path.exists(jpeg2000_full_path), "Jpeg 2000 file does not exist")
 
 
     def testCrop(self):
 
-        image = np.zeros((16, 16))
+        image_dim = (16,16)
+        image = np.zeros(image_dim)
 
-        for i in range(0, 16):
-            image[i, i] = i + 1
+        row_fill = np.array((range(1,image_dim[1]+1)))
+        for iy in range(0, 16):
+            image[iy, :] = row_fill
 
         cropsize = 4
         cropped = core.CropImage(image, 0, 0, cropsize, cropsize)
@@ -152,6 +169,18 @@ class Test(setup_imagetest.ImageTestBase):
 
             self.assertEqual(cropped[i + 1, i], testVal, "cropped image not correct")
             
+        cropsize = image_dim[0]
+        constant_value = 3
+        cropped = core.CropImage(image, -cropsize, image_dim[0], cropsize, cropsize,cval=constant_value)
+        for i in range(0, cropsize):
+            self.assertEqual(cropped[i, i], constant_value, "Cropped region outside original image should use cval")
+            
+        cropped = core.CropImage(image, -(cropsize/2.0), -(cropsize/2.0), cropsize, cropsize,cval='random')
+        for i in range(0, cropsize):
+            self.assertGreaterEqual(cropped[i, i], 0, "Cropped region outside original image should use random value")
+        
+        core.ShowGrayscale(cropped, title="The bottom left quadrant is a gradient.  The remainder is random noise.")
+            
     
     def testImageToTiles(self):
         self.FixedImagePath = os.path.join(self.ImportedDataPath, "0017_TEM_Leveled_image__feabinary_Cel64_Mes8_sp4_Mes8.png")
@@ -187,7 +216,7 @@ class Test(setup_imagetest.ImageTestBase):
         self.assertTrue(mask[0][0] == 0, "The mask pixel we are going to test is not masked, test is broken")
         self.assertFalse(mask[256][256] == 0, "The unmasked pixel we are going to test is  masked, test is broken")
 
-        updatedImage = core.RandomNoiseMask(image, mask)
+        updatedImage = core.RandomNoiseMask(image, mask,Copy=True)
         # core.ShowGrayscale(updatedImage)
 
         self.assertIsNotNone(updatedImage)
@@ -209,7 +238,7 @@ class Test(setup_imagetest.ImageTestBase):
         self.assertTrue(mask[0][0] == 0, "The mask pixel we are going to test is not masked, test is broken")
         self.assertFalse(mask[32][32] == 0, "The unmasked pixel we are going to test is  masked, test is broken")
 
-        updatedImage = core.RandomNoiseMask(image, mask)
+        updatedImage = core.RandomNoiseMask(image, mask,Copy=True)
 
         # core.ShowGrayscale(updatedImage)
         self.assertIsNotNone(updatedImage)

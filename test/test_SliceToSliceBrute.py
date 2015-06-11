@@ -14,6 +14,7 @@ from nornir_imageregistration import alignment_record
 import nornir_imageregistration
 import nornir_imageregistration.files
 import nornir_imageregistration.transforms
+import nornir_imageregistration.scripts.nornir_rotate_translate
 
 def CheckAlignmentRecord(test, arecord, angle, X, Y, adelta=None, sdelta=None):
         '''Verifies that an alignment record is more or less equal to expected values'''
@@ -94,7 +95,7 @@ class TestStosBrute(setup_imagetest.ImageTestBase):
         CheckAlignmentRecord(self, AlignmentRecord, angle=-132.0, X=-4, Y=22)
 
         # OK, try to save the stos file and reload it.  Make sure the transforms match
-        savedstosObj = AlignmentRecord.ToStos(FixedImagePath, WarpedImagePath, PixelSpacing=1)
+        savedstosObj = AlignmentRecord.ToStos(FixedImagePath, WarpedImagePath,PixelSpacing=1)
         self.assertIsNotNone(savedstosObj)
 
         FixedSize = core.GetImageSize(FixedImagePath)
@@ -108,6 +109,10 @@ class TestStosBrute(setup_imagetest.ImageTestBase):
 
         loadedStosObj = nornir_imageregistration.files.stosfile.StosFile.Load(stosfilepath)
         self.assertIsNotNone(loadedStosObj)
+        
+        self.assertFalse(loadedStosObj.HasMasks, "Stos file saved without masks should return false in HasMasks check")
+        self.assertIsNone(loadedStosObj.ControlMaskName, "Mask in .stos does not match mask used in alignment\n")
+        self.assertIsNone(loadedStosObj.MappedMaskName, "Mask in .stos does not match mask used in alignment\n")
 
         loadedTransform = nornir_imageregistration.transforms.factory.LoadTransform(loadedStosObj.Transform)
         self.assertIsNotNone(loadedTransform)
@@ -118,10 +123,14 @@ class TestStosBrute(setup_imagetest.ImageTestBase):
         self.assertTrue(os.path.exists(WarpedImagePath), "Missing test input")
         FixedImagePath = os.path.join(self.ImportedDataPath, "mini_TEM_Leveled_image__feabinary_Cel64_Mes8_sp4_Mes8.png")
         self.assertTrue(os.path.exists(FixedImagePath), "Missing test input")
+        
+        
+        controlMaskName = "mini_TEM_Leveled_mask__feabinary_Cel64_Mes8_sp4_Mes8.png"
+        warpedMaskName = "0017_TEM_Leveled_mask__feabinary_Cel64_Mes8_sp4_Mes8.png"
 
-        WarpedImageMaskPath = os.path.join(self.ImportedDataPath, "0017_TEM_Leveled_mask__feabinary_Cel64_Mes8_sp4_Mes8.png")
+        WarpedImageMaskPath = os.path.join(self.ImportedDataPath, warpedMaskName)
         self.assertTrue(os.path.exists(WarpedImagePath), "Missing test input")
-        FixedImageMaskPath = os.path.join(self.ImportedDataPath, "mini_TEM_Leveled_mask__feabinary_Cel64_Mes8_sp4_Mes8.png")
+        FixedImageMaskPath = os.path.join(self.ImportedDataPath, controlMaskName)
         self.assertTrue(os.path.exists(FixedImagePath), "Missing test input")
 
         AlignmentRecord = stos_brute.SliceToSliceBruteForce(FixedImagePath,
@@ -131,6 +140,48 @@ class TestStosBrute(setup_imagetest.ImageTestBase):
 
         self.Logger.info("Best alignment: " + str(AlignmentRecord))
         CheckAlignmentRecord(self, AlignmentRecord, angle=-132.0, X=-4, Y=22)
+        
+        savedstosObj = AlignmentRecord.ToStos(FixedImagePath, WarpedImagePath, FixedImageMaskPath, WarpedImageMaskPath, PixelSpacing=1)
+        self.assertIsNotNone(savedstosObj)
+
+        stosfilepath = os.path.join(self.VolumeDir, '17-18_brute_WithMask.stos')
+        savedstosObj.Save(stosfilepath)
+        
+        loadedStosObj = nornir_imageregistration.files.stosfile.StosFile.Load(stosfilepath)
+        self.assertIsNotNone(loadedStosObj)
+        
+        self.assertTrue(loadedStosObj.HasMasks, ".stos file is expected to have masks")
+        
+        self.assertEqual(loadedStosObj.ControlMaskName, controlMaskName, "Mask in .stos does not match mask used in alignment\n")
+        self.assertEqual(loadedStosObj.MappedMaskName, warpedMaskName, "Mask in .stos does not match mask used in alignment\n")
+        
+    def testStosBruteExecute(self):
+         
+        WarpedImagePath = os.path.join(self.ImportedDataPath, "0017_TEM_Leveled_image__feabinary_Cel64_Mes8_sp4_Mes8.png")
+        self.assertTrue(os.path.exists(WarpedImagePath), "Missing test input")
+        FixedImagePath = os.path.join(self.ImportedDataPath, "mini_TEM_Leveled_image__feabinary_Cel64_Mes8_sp4_Mes8.png")
+        self.assertTrue(os.path.exists(FixedImagePath), "Missing test input")
+        
+        controlMaskName = "mini_TEM_Leveled_mask__feabinary_Cel64_Mes8_sp4_Mes8.png"
+        warpedMaskName = "0017_TEM_Leveled_mask__feabinary_Cel64_Mes8_sp4_Mes8.png"
+
+        WarpedImageMaskPath = os.path.join(self.ImportedDataPath, warpedMaskName)
+        self.assertTrue(os.path.exists(WarpedImagePath), "Missing test input")
+        FixedImageMaskPath = os.path.join(self.ImportedDataPath, controlMaskName)
+        self.assertTrue(os.path.exists(FixedImagePath), "Missing test input")
+        
+        stosfilepath = os.path.join(self.VolumeDir, '17-18_brute_WithMask.stos')
+        
+
+        nornir_imageregistration.scripts.nornir_rotate_translate.Execute(ExecArgs=['-f', FixedImagePath, 
+                                                                             '-w', WarpedImagePath,
+                                                                             '-fm', FixedImageMaskPath, 
+                                                                             '-wm', WarpedImageMaskPath,
+                                                                             '-o', stosfilepath])
+        
+        self.assertTrue(os.path.exists(stosfilepath), "Stos brute script should create output")
+        
+
 
 class TestStosBruteToSameImage(setup_imagetest.ImageTestBase):
 

@@ -5,6 +5,7 @@ Created on Oct 4, 2012
 '''
 import ctypes
 import logging
+import multiprocessing
 import multiprocessing.sharedctypes
 import os
 from time import sleep
@@ -16,6 +17,7 @@ import nornir_imageregistration.core as core
 import nornir_pools as pools
 import numpy as np
 import scipy.ndimage.interpolation as interpolation
+import nornir_imageregistration
 
 
 # from memory_profiler import profile
@@ -53,7 +55,7 @@ def SliceToSliceBruteForce(FixedImageInput,
         imFixed = core.ReduceImage(imFixed, scalar)
         imWarped = core.ReduceImage(imWarped, scalar)
 
-    # Replace extrama with noise
+    # Replace extrema with noise
     imFixed = core.ReplaceImageExtramaWithNoise(imFixed, ImageMedian=0.5, ImageStdDev=0.25)
     imWarped = core.ReplaceImageExtramaWithNoise(imWarped, ImageMedian=0.5, ImageStdDev=0.25)
 
@@ -72,16 +74,21 @@ def SliceToSliceBruteForce(FixedImageInput,
 
     if scalar > 1.0:
         AdjustedPeak = (BestRefinedMatch.peak[0] * scalar, BestRefinedMatch.peak[1] * scalar)
-        BestRefinedMatch = AlignmentRecord(AdjustedPeak, BestRefinedMatch.weight, BestRefinedMatch.angle)
+        BestRefinedMatch = nornir_imageregistration.AlignmentRecord(AdjustedPeak, BestRefinedMatch.weight, BestRefinedMatch.angle)
 
    # BestRefinedMatch.CorrectPeakForOriginalImageSize(imFixed.shape, imWarped.shape)
 
     return BestRefinedMatch
 
 
+        
+
 
 def ScoreOneAngle(imFixed, imWarped, angle, fixedStats=None, warpedStats=None, FixedImagePrePadded=True, MinOverlap=0.75):
     '''Returns an alignment score for a fixed image and an image rotated at a specified angle'''
+    
+    imFixed = core.ImageParamToImageArray(imFixed)
+    imWarped = core.ImageParamToImageArray(imWarped)
 
     # gc.set_debug(gc.DEBUG_LEAK)
     if fixedStats is None:
@@ -90,11 +97,11 @@ def ScoreOneAngle(imFixed, imWarped, angle, fixedStats=None, warpedStats=None, F
     if warpedStats is None:
         warpedStats = core.ImageStats.CalcStats(imWarped)
 
-    RotatedWarped = None
-    OKToDelimWarped = False
+    OKToDelimWarped = False 
     if angle != 0:
         imWarped = interpolation.rotate(imWarped, axes=(1, 0), angle=angle)
         OKToDelimWarped = True
+        
 
     RotatedWarped = core.PadImageForPhaseCorrelation(imWarped, ImageMedian=warpedStats.median, ImageStdDev=warpedStats.std, MinOverlap=MinOverlap)
 
@@ -129,9 +136,7 @@ def ScoreOneAngle(imFixed, imWarped, angle, fixedStats=None, warpedStats=None, F
     CorrelationImage = fftshift(CorrelationImage)
     CorrelationImage -= CorrelationImage.min()
     CorrelationImage /= CorrelationImage.max()
-
-    # del CorrelationImage
-
+    
     # Timer.Start('Find Peak')
     (peak, weight) = core.FindPeak(CorrelationImage)
 
@@ -160,6 +165,9 @@ def FindBestAngle(imFixed, imWarped, AngleList, MinOverlap=0.75, SingleThread=Fa
 
     Debug = False
     pool = None
+    
+    #Temporarily disable until we have  cluster pool working again.  Leaving this on eliminates shared memory which is a big optimization
+    Cluster=False
 
     if Debug:
         pool = pools.GetThreadPool(Poolname=None, num_threads=3)
@@ -185,8 +193,11 @@ def FindBestAngle(imFixed, imWarped, AngleList, MinOverlap=0.75, SingleThread=Fa
     # Create a shared read-only memory map for the Padded fixed image
 
     if not Cluster:
-        SharedPaddedFixed = core.npArrayToReadOnlySharedArray(PaddedFixed)
-        SharedWarped = core.npArrayToReadOnlySharedArray(imWarped)
+        temp_padded_fixed_memmap = core.CreateTemporaryReadonlyMemmapFile(PaddedFixed)
+        temp_shared_warp_memmap = core.CreateTemporaryReadonlyMemmapFile(imWarped)
+        #SharedPaddedFixed = core.npArrayToReadOnlySharedArray(PaddedFixed)
+        #SharedWarped = core.npArrayToReadOnlySharedArray(imWarped)
+        #SharedPaddedFixed = np.save(PaddedFixed, )
     else:
         SharedPaddedFixed = PaddedFixed
         SharedWarped = imWarped
@@ -196,21 +207,23 @@ def FindBestAngle(imFixed, imWarped, AngleList, MinOverlap=0.75, SingleThread=Fa
     for i, theta in enumerate(AngleList):
 
         if SingleThread:
-            record = ScoreOneAngle(SharedPaddedFixed, SharedWarped, theta, fixedStats=fixedStats, warpedStats=warpedStats, MinOverlap=MinOverlap)
+            record = ScoreOneAngle(temp_padded_fixed_memmap, temp_shared_warp_memmap, theta, fixedStats=fixedStats, warpedStats=warpedStats, MinOverlap=MinOverlap)
             AngleMatchValues.append(record)
         else:
-            task = pool.add_task(str(theta), ScoreOneAngle, SharedPaddedFixed, SharedWarped, theta, fixedStats=fixedStats, warpedStats=warpedStats, MinOverlap=MinOverlap)
+            task = pool.add_task(str(theta), ScoreOneAngle, temp_padded_fixed_memmap, temp_shared_warp_memmap, theta, fixedStats=fixedStats, warpedStats=warpedStats, MinOverlap=MinOverlap)
             taskList.append(task)
 
         if not i % CheckTaskInterval == 0:
             continue
 
-        # I don't like this, but it lets me delete tasks before filling the queue which may save some memory
-        for iTask in range(len(taskList) - 1, 0, -1):
-            if taskList[iTask].iscompleted:
-                record = taskList[iTask].wait_return()
-                AngleMatchValues.append(record)
-                del taskList[iTask]
+        # I don't like this, but it lets me delete tasks before filling the queue which may save some memory.
+        # No sense checking unless we've already filled the queue though
+        if len(taskList) > multiprocessing.cpu_count() * 1.5:
+            for iTask in range(len(taskList) - 1, -1, -1):
+                if taskList[iTask].iscompleted:
+                    record = taskList[iTask].wait_return()
+                    AngleMatchValues.append(record)
+                    del taskList[iTask]
 
         # TestOneAngle(SharedPaddedFixed, SharedWarped, angle, None, MinOverlap)
 
@@ -234,12 +247,17 @@ def FindBestAngle(imFixed, imWarped, AngleList, MinOverlap=0.75, SingleThread=Fa
         # ShowGrayscale(NormCorrelationImage)
 
     # print str(AngleMatchValues)
+    
+    #Delete the pool to ensure extra python threads do not stick around
+    pool.wait_completion()
 
     del PaddedFixed
 
     if not Cluster:
-        del SharedPaddedFixed
-        del SharedWarped
+        os.remove(temp_padded_fixed_memmap.path)
+        os.remove(temp_shared_warp_memmap.path)
+        #del SharedPaddedFixed
+        #del SharedWarped
 
     BestMatch = max(AngleMatchValues, key=nornir_imageregistration.AlignmentRecord.WeightKey)
     return BestMatch

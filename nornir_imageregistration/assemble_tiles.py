@@ -5,10 +5,10 @@ Deals with assembling images composed of mosaics or dividing images into tiles
 '''
 
 import numpy as np
-from scipy import stats
-import scipy.spatial.distance
 import os
 import logging
+
+import multiprocessing
 
 import nornir_imageregistration.assemble  as assemble
 # from nornir_imageregistration.files.mosaicfile import MosaicFile
@@ -41,13 +41,29 @@ def GetProcessAndThreadUniqueString():
 
 
 class TransformedImageData(object):
+    '''
+    Returns data from multiprocessing thread processes.  Uses memory mapped files when there is too much data for pickle to be efficient
+    '''
 
+    memmap_threshold = 500 * 500
+    
     @property
     def image(self):
+        if self._image is None:
+            if self._image_path is None:
+                return None 
+             
+            self._image = np.memmap(self._image_path, mode='c', shape=self._image_shape, dtype=self._image_dtype)
+            
         return self._image
-
+    
     @property
     def centerDistanceImage(self):
+        if self._centerDistanceImage is None:
+            if self._centerDistanceImage_path is None:
+                return None
+            self._centerDistanceImage = np.memmap(self._centerDistanceImage_path, mode='c', shape=self._centerDistanceImage_shape, dtype=self._centerDistance_dtype)
+            
         return self._centerDistanceImage
 
     @property
@@ -61,16 +77,55 @@ class TransformedImageData(object):
     @property
     def errormsg(self):
         return self._errmsg
+    
+    @property
+    def tempfiledir(self):
+        if self._tempdir is None:
+            self._tempdir = tempfile.mkdtemp("TransformedImageData")
+            
+        return self._tempdir
 
     @classmethod
     def Create(cls, image, centerDistanceImage, transform, scale):
         o = TransformedImageData()
         o._image = image
         o._centerDistanceImage = centerDistanceImage
+        
+        o._image_path = None
+        o._centerDistanceImage_path = None
         o._transformScale = scale
         o._transform = transform
-
+        
+        #o.ConvertToMemmapIfLarge()
+        
         return o
+    
+    def ConvertToMemmapIfLarge(self): 
+        if np.prod(self._image.shape) > TransformedImageData.memmap_threshold:
+            self._image_path = self.CreateMemoryMappedFilesForImage("Image", self._image)
+            self._image_shape = self._image.shape
+            self._image_dtype = self._image.dtype
+            self._image = None
+            
+        if np.prod(self._centerDistanceImage.shape) > TransformedImageData.memmap_threshold:
+            self._centerDistanceImage_path = self.CreateMemoryMappedFilesForImage("Distance", self._centerDistanceImage)
+            self._centerDistanceImage_shape = self._centerDistanceImage.shape
+            self._centerDistance_dtype = self._centerDistanceImage.dtype
+            self._centerDistanceImage = None
+            
+        return
+     
+    def CreateMemoryMappedFilesForImage(self, name, image):
+        if image is None:
+            return None 
+        
+        tempfilename = os.path.join(self.tempfiledir, name + '.dat')
+        memmapped_image = np.memmap(tempfilename, dtype=image.dtype, mode='w+', shape=image.shape)
+        np.copyto(memmapped_image, image)
+        print("Write %s" % tempfilename)
+        
+        del memmapped_image
+        return tempfilename
 
 
     def Clear(self):
@@ -79,7 +134,16 @@ class TransformedImageData(object):
         self._centerDistanceImage = None
         self._transformScale = None
         self._transform = None
-
+        
+        if not self._centerDistanceImage_path is None:
+            os.remove(self._centerDistanceImage_path)
+            
+        if not self._image_path is None:
+            os.remove(self._image_path)
+            
+        #if not self._tempdir is None:
+        #    os.remove(self._tempdir)
+         
 
     def __init__(self, errorMsg=None):
         self._image = None
@@ -87,6 +151,13 @@ class TransformedImageData(object):
         self._transformScale = None
         self._transform = None
         self._errmsg = errorMsg
+        self._image_path = None
+        self._centerDistanceImage_path = None
+        self._tempdir = None
+        self._image_shape = None
+        self._centerDistanceImage_shape = None
+        self._image_dtype = None
+        self._centerDistance_dtype = None
 
 def CompositeImage(FullImage, SubImage, offset):
 
@@ -117,24 +188,18 @@ def CompositeImageWithZBuffer(FullImage, FullZBuffer, SubImage, SubZBuffer, offs
     if((np.array([maxY-minY,maxX-minX]) != SubZBuffer.shape).any()):
         raise ValueError("Buffers do not have the same dimensions")
     
+    #iNewIndex = np.zeros(FullImage.shape, dtype=np.bool)
+
+    #iUpdate = FullZBuffer[minY:maxY, minX:maxX] > SubZBuffer
+    #iNewIndex[minY:maxY, minX:maxX] = iUpdate
+    #FullImage[iNewIndex] = SubImage[iUpdate]
+    #FullZBuffer[iNewIndex] = SubZBuffer[iUpdate]
+    
     iUpdate = FullZBuffer[minY:maxY, minX:maxX] > SubZBuffer
     FullImage[minY:maxY, minX:maxX][iUpdate] = SubImage[iUpdate]
-    FullZBuffer[minY:maxY, minX:maxX][iUpdate] = SubZBuffer[iUpdate]
-    
-# 
-#     tempFullImage = FullImage[minY:maxY, minX:maxX]
-#     tempZBuffer = FullZBuffer[minY:maxY, minX:maxX]    
-# 
-#     iUpdate = tempZBuffer > SubZBuffer
-# 
-#     tempFullImage[iUpdate] = SubImage[iUpdate]
-#     tempZBuffer[iUpdate] = SubZBuffer[iUpdate]
-# 
-#     # FullImage[minY:maxY, minX:maxX] += SubImage
-#     FullImage[minY:maxY, minX:maxX] = tempFullImage
-#     FullZBuffer[minY:maxY, minX:maxX] = tempZBuffer
- 
+    FullZBuffer[minY:maxY, minX:maxX][iUpdate] = SubZBuffer[iUpdate] 
 
+    return
 
 def distFunc(i, j):
     print((str(i) + ", " + str(j)))
@@ -180,12 +245,12 @@ def EmptyDistanceBuffer(shape, dtype=np.float16):
     fullImageZbuffer = None
     
     if use_memmap:
-        full_distance_image_array_path = os.path.join(tempfile.gettempdir(), 'distance_image_%dx%d.npy' % (shape[0],shape[1]))
+        full_distance_image_array_path = os.path.join(tempfile.gettempdir(), 'distance_image_%dx%d_%s.npy' % (shape[0],shape[1], GetProcessAndThreadUniqueString()))
         fullImageZbuffer = np.memmap(full_distance_image_array_path, dtype=np.float16, mode='w+', shape=shape)
         fullImageZbuffer[:] =  __MaxZBufferValue(dtype)
-    
+        fullImageZbuffer.flush()
         del fullImageZbuffer
-        fullImageZbuffer = np.memmap(full_distance_image_array_path, dtype=np.float16, mode='w+', shape=shape)
+        fullImageZbuffer = np.memmap(full_distance_image_array_path, dtype=np.float16, mode='r+', shape=shape)
     else:
         fullImageZbuffer = np.full(shape, __MaxZBufferValue(dtype), dtype=dtype)
     
@@ -197,7 +262,7 @@ def __CreateOutputBufferForTransforms(transforms, requiredScale=None):
     :return: (fullImage, ZBuffer)
     '''
     fullImage = None
-    (minY, minX, maxY, maxX) = tutils.FixedBoundingBox(transforms)
+    (minY, minX, maxY, maxX) = tutils.FixedBoundingBox(transforms).ToTuple()
     fullImage_shape = (int(np.ceil(requiredScale * maxY)), int(np.ceil(requiredScale * maxX)))
      
     if use_memmap:
@@ -205,8 +270,9 @@ def __CreateOutputBufferForTransforms(transforms, requiredScale=None):
             fullimage_array_path = os.path.join(tempfile.gettempdir(), 'image_%dx%d_%s.npy' % (fullImage_shape[0],fullImage_shape[1],GetProcessAndThreadUniqueString()))
             fullImage = np.memmap(fullimage_array_path, dtype=np.float16, mode='w+', shape=fullImage_shape)
             fullImage[:] = 0
+            fullImage.flush()
             del fullImage
-            fullImage = np.memmap(fullimage_array_path, dtype=np.float16, mode='w+', shape=fullImage_shape)
+            fullImage = np.memmap(fullimage_array_path, dtype=np.float16, mode='r+', shape=fullImage_shape)
         except: 
             prettyoutput.LogErr("Unable to open memory mapped file %s." % (fullimage_array_path))
             raise 
@@ -294,7 +360,7 @@ def TilesToImage(transforms, imagepaths, FixedRegion=None, requiredScale=None):
 
     assert(len(transforms) == len(imagepaths))
 
-    logger = logging.getLogger(__name__ + '.TilesToImage')
+    #logger = logging.getLogger(__name__ + '.TilesToImage')
 
     if requiredScale is None:
         requiredScale = tiles.MostCommonScalar(transforms, imagepaths)
@@ -302,7 +368,6 @@ def TilesToImage(transforms, imagepaths, FixedRegion=None, requiredScale=None):
     distanceImage = None
     fixedRect = None
     fullImage = None
-    fullImageZBuffer = None
 
     if not FixedRegion is None:
         fixedRect = spatial.Rectangle.CreateFromPointAndArea((FixedRegion[0], FixedRegion[1]), (FixedRegion[2] - FixedRegion[0], FixedRegion[3] - FixedRegion[1]))
@@ -328,7 +393,7 @@ def TilesToImage(transforms, imagepaths, FixedRegion=None, requiredScale=None):
         transformedImageData = TransformTile(transform, imagefullpath, distanceImage, requiredScale=requiredScale, FixedRegion=FixedRegion)
 
         if fixedRect is None:
-            (minY, minX, maxY, maxX) = transformedImageData.transform.FixedBoundingBox
+            (minY, minX, maxY, maxX) = transformedImageData.transform.FixedBoundingBox.ToTuple()
 
         CompositeImageWithZBuffer(fullImage, fullImageZbuffer, transformedImageData.image, transformedImageData.centerDistanceImage, (np.floor(minY), np.floor(minX)))
 
@@ -353,19 +418,18 @@ def TilesToImageParallel(transforms, imagepaths, FixedRegion=None, requiredScale
 
     logger = logging.getLogger('TilesToImageParallel')
 
-    distanceImage = None
-
     if requiredScale is None:
         requiredScale = tiles.MostCommonScalar(transforms, imagepaths)
 
+    
     if pool is None:
-        pool = pools.GetGlobalLocalMachinePool()
+        pool = pools.GetGlobalMultithreadingPool()
+        
+    #pool = pools.GetGlobalSerialPool()
 
     tasks = []
     fixedRect = None
     fullImage = None
-    fullImageZBuffer = None
-     
 
     if not FixedRegion is None:
         fixedRect = spatial.Rectangle.CreateFromPointAndArea((FixedRegion[0], FixedRegion[1]), (FixedRegion[2] - FixedRegion[0], FixedRegion[3] - FixedRegion[1]))
@@ -374,9 +438,6 @@ def TilesToImageParallel(transforms, imagepaths, FixedRegion=None, requiredScale
         (fullImage, fullImageZbuffer) = __CreateOutputBufferForTransforms(transforms, requiredScale)
 
     CheckTaskInterval = 16
-
-    minY = 0
-    minX = 0
 
     for i, transform in enumerate(transforms):
 
@@ -394,17 +455,18 @@ def TilesToImageParallel(transforms, imagepaths, FixedRegion=None, requiredScale
 
         if not i % CheckTaskInterval == 0:
             continue
-
-        iTask = len(tasks) - 1
-        while iTask >= 0:
-            t = tasks[iTask]
-            if t.iscompleted:
-                transformedImageData = t.wait_return()
-                __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZbuffer, FixedRegion)
-                del transformedImageData 
-                del tasks[iTask]
-            
-            iTask -= 1
+        
+        if len(tasks) > multiprocessing.cpu_count():
+            iTask = len(tasks) - 1
+            while iTask >= 0:
+                t = tasks[iTask]
+                if t.iscompleted:
+                    transformedImageData = t.wait_return()
+                    __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZbuffer, FixedRegion)
+                    del transformedImageData 
+                    del tasks[iTask]
+                
+                iTask -= 1
 
     logger.info('All warps queued, integrating results into final image')
 
@@ -426,6 +488,8 @@ def TilesToImageParallel(transforms, imagepaths, FixedRegion=None, requiredScale
                 del tasks[iTask]
             
             iTask -= 1
+            
+    logger.info('Final image complete, building mask')
 
     mask = fullImageZbuffer < __MaxZBufferValue(fullImageZbuffer.dtype)
     del fullImageZbuffer
@@ -433,7 +497,7 @@ def TilesToImageParallel(transforms, imagepaths, FixedRegion=None, requiredScale
     fullImage[fullImage < 0] = 0
     fullImage[fullImage > 1.0] = 1.0
 
-    logger.info('Final image complete')
+    logger.info('Assemble complete')
     
     if use_memmap:
         fullImage.flush()
@@ -445,7 +509,7 @@ def __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZB
     
     if transformedImageData is None:
             logger = logging.getLogger('TilesToImageParallel')
-            logger.error('Convert task failed: ' + str(t))
+            logger.error('Convert task failed: ' + str(transformedImageData))
             return
         
     if transformedImageData.image is None:
@@ -458,7 +522,7 @@ def __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZB
     minY = 0
     minX = 0
     if FixedRegion is None:
-        (minY, minX, maxY, maxX) = transformedImageData.transform.FixedBoundingBox
+        (minY, minX, maxY, maxX) = transformedImageData.transform.FixedBoundingBox.ToTuple()
 
     # print "%g %g" % (minX, minY)
     try:
@@ -469,6 +533,7 @@ def __AddTransformedTileToComposite(transformedImageData, fullImage, fullImageZB
         logger.error('Transformed tile mapped to negative coordinates ' + str(transformedImageData))
         pass
 
+    
     transformedImageData.Clear()
 
 
@@ -493,7 +558,7 @@ def TransformTile(transform, imagefullpath, distanceImage=None, requiredScale=No
 
 
     # if isinstance(transform, meshwithrbffallback.MeshWithRBFFallback):
-       # Don't bother mapping points falling outside the defined boundaries because we won't have image data for it
+    # Don't bother mapping points falling outside the defined boundaries because we won't have image data for it
     #   transform = triangulation.Triangulation(transform.points)
 
     warpedImage = core.LoadImage(imagefullpath)
@@ -521,10 +586,10 @@ def TransformTile(transform, imagefullpath, distanceImage=None, requiredScale=No
 
     if FixedRegion is None:
 
-        width = transform.FixedBoundingBoxWidth
-        height = transform.FixedBoundingBoxHeight
+        width = transform.FixedBoundingBox.Width
+        height = transform.FixedBoundingBox.Height
 
-        (minY, minX, maxY, maxX) = transform.FixedBoundingBox
+        (minY, minX, maxY, maxX) = transform.FixedBoundingBox.ToTuple()
     else:
         assert(len(FixedRegion) == 4)
         (minY, minX, height, width) = (FixedRegion[0], FixedRegion[1], FixedRegion[2] - FixedRegion[0], FixedRegion[3] - FixedRegion[1])
