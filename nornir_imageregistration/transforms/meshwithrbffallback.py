@@ -6,15 +6,15 @@ Created on Oct 18, 2012
 
 import math
 
-import numpy
-import scipy.interpolate
-
 from nornir_imageregistration.transforms import base, triangulation
 from nornir_imageregistration.transforms.rbftransform import \
     RBFWithLinearCorrection
-import nornir_pools as pools
-import scipy.linalg as linalg
-import scipy.spatial as spatial
+import numpy
+import scipy.interpolate
+
+import nornir_pools
+#import scipy.linalg as linalg
+#import scipy.spatial as spatial
 
 from . import utils
 
@@ -38,17 +38,16 @@ class MeshWithRBFFallback(triangulation.Triangulation):
 
         return self._ForwardRBFInstance
 
-    def UpdateDataStructures(self):
+    def InitializeDataStructures(self):
 
-        Pool = pools.GetGlobalThreadPool()
+        Pool = nornir_pools.GetGlobalThreadPool()
         ForwardTask = Pool.add_task("Solve forward RBF transform", RBFWithLinearCorrection, self.WarpedPoints, self.FixedPoints)
         ReverseTask = Pool.add_task("Solve reverse RBF transform", RBFWithLinearCorrection, self.FixedPoints, self.WarpedPoints)
 
-        super(MeshWithRBFFallback, self).UpdateDataStructures()
+        super(MeshWithRBFFallback, self).InitializeDataStructures()
 
         self._ForwardRBFInstance = ForwardTask.wait_return()
         self._ReverseRBFInstance = ReverseTask.wait_return()
-
 
 
     def ClearDataStructures(self):
@@ -56,28 +55,37 @@ class MeshWithRBFFallback(triangulation.Triangulation):
            Clear out our data structures so we do not use bad data'''
 
         super(MeshWithRBFFallback, self).ClearDataStructures()
-
         self._ForwardRBFInstance = None
         self._ReverseRBFInstance = None
+
+    def OnFixedPointChanged(self):
+        self._ForwardRBFInstance = None
+        self._ReverseRBFInstance = None
+        super(MeshWithRBFFallback, self).OnFixedPointChanged()
+
+    def OnWarpedPointChanged(self):
+        self._ForwardRBFInstance = None
+        self._ReverseRBFInstance = None
+        super(MeshWithRBFFallback, self).OnWarpedPointChanged()
 
 
     def Transform(self, points, **kwargs):
         '''
         :param bool extrapolate: Set to false if points falling outside the convex hull of control points should be removed from the return values
         '''
-        
-        if len(points) == 0:
-            return [];
 
-        points = numpy.asarray(points, dtype=numpy.float32);
+        points = self.EnsurePointsAre2DNumpyArray(points)
+
+        if points.shape[0] == 0:
+            return [];
 
         TransformedPoints = super(MeshWithRBFFallback, self).Transform(points)
         extrapolate = kwargs.get('extrapolate', True)
         if not extrapolate:
             return TransformedPoints
-        
+
         (GoodPoints, InvalidIndicies) = utils.InvalidIndicies(TransformedPoints)
-        
+
         if(len(InvalidIndicies) == 0):
             return TransformedPoints;
         else:
@@ -96,28 +104,27 @@ class MeshWithRBFFallback(triangulation.Triangulation):
     def InverseTransform(self, points, **kwargs):
         '''
         :param bool extrapolate: Set to false if points falling outside the convex hull of control points should be removed from the return values
-        '''
-        if len(points) == 0:
-            return []
+        ''' 
 
-        if not isinstance(points, numpy.ndarray):
-            points = numpy.asarray(points, dtype=numpy.float32);
+        points = self.EnsurePointsAre2DNumpyArray(points)
+
+        if points.shape[0] == 0:
+            return [];
 
         TransformedPoints = super(MeshWithRBFFallback, self).InverseTransform(points)
         extrapolate = kwargs.get('extrapolate', True)
         if not extrapolate:
             return TransformedPoints
-        
+
         (GoodPoints, InvalidIndicies) = utils.InvalidIndicies(TransformedPoints)
-
-
+ 
         if(len(InvalidIndicies) == 0):
             return TransformedPoints
         else:
-            if len(points) > 1:
+            if points.ndim > 1:
                 BadPoints = points[InvalidIndicies]
             else:
-                BadPoints = points
+                BadPoints = points  # This is likely no longer needed since this function always returns a 2D array now
 
         if not (BadPoints.dtype == numpy.float32 or BadPoints.dtype == numpy.float64):
             BadPoints = numpy.asarray(BadPoints, dtype=numpy.float32)

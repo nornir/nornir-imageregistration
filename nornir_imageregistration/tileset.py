@@ -13,7 +13,7 @@ from scipy import stats
 from scipy.misc import imsave
 
 import nornir_imageregistration.transforms.utils as tutils
-import nornir_pools as pools
+#import nornir_pools as pools
 import numpy as np
 
 from . import core
@@ -33,7 +33,7 @@ def __DetermineTransformScale(transform, imageSize):
     width = transform.MappedBoundingBox.Width
     height = transform.MappedBoundingBox.Height
 
-    if core.ApproxEqual(imageSize[0], height,epsilon=1.1) and core.ApproxEqual(imageSize[1], width,epsilon=1.1):
+    if core.ApproxEqual(imageSize[0], height, epsilon=1.1) and core.ApproxEqual(imageSize[1], width, epsilon=1.1):
         return 1.0
     else:
         heightScale = (imageSize[0] / height)

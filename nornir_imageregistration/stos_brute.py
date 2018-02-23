@@ -10,14 +10,14 @@ import multiprocessing.sharedctypes
 import os
 from time import sleep
 
+import nornir_imageregistration
+import nornir_imageregistration
 from numpy.fft import fftshift
 
-import nornir_imageregistration
 import nornir_imageregistration.core as core
-import nornir_pools as pools
+import nornir_pools
 import numpy as np
 import scipy.ndimage.interpolation as interpolation
-import nornir_imageregistration
 
 
 # from memory_profiler import profile
@@ -81,12 +81,9 @@ def SliceToSliceBruteForce(FixedImageInput,
     return BestRefinedMatch
 
 
-        
-
-
 def ScoreOneAngle(imFixed, imWarped, angle, fixedStats=None, warpedStats=None, FixedImagePrePadded=True, MinOverlap=0.75):
     '''Returns an alignment score for a fixed image and an image rotated at a specified angle'''
-    
+
     imFixed = core.ImageParamToImageArray(imFixed)
     imWarped = core.ImageParamToImageArray(imWarped)
 
@@ -101,7 +98,7 @@ def ScoreOneAngle(imFixed, imWarped, angle, fixedStats=None, warpedStats=None, F
     if angle != 0:
         imWarped = interpolation.rotate(imWarped, axes=(1, 0), angle=angle)
         OKToDelimWarped = True
-        
+
 
     RotatedWarped = core.PadImageForPhaseCorrelation(imWarped, ImageMedian=warpedStats.median, ImageStdDev=warpedStats.std, MinOverlap=MinOverlap)
 
@@ -148,7 +145,7 @@ def ScoreOneAngle(imFixed, imWarped, angle, fixedStats=None, warpedStats=None, F
 
 
 def GetFixedAndWarpedImageStats(imFixed, imWarped):
-    tpool = pools.GetGlobalThreadPool()
+    tpool = nornir_pools.GetGlobalThreadPool()
 
     fixedStatsTask = tpool.add_task('FixedStats', core.ImageStats.CalcStats, imFixed)
     warpedStatsTask = tpool.add_task('WarpedStats', core.ImageStats.CalcStats, imWarped)
@@ -166,15 +163,15 @@ def FindBestAngle(imFixed, imWarped, AngleList, MinOverlap=0.75, SingleThread=Fa
     Debug = False
     pool = None
     
-    #Temporarily disable until we have  cluster pool working again.  Leaving this on eliminates shared memory which is a big optimization
-    Cluster=False
+    # Temporarily disable until we have  cluster pool working again.  Leaving this on eliminates shared memory which is a big optimization
+    Cluster = False
 
     if Debug:
-        pool = pools.GetThreadPool(Poolname=None, num_threads=3)
+        pool = nornir_pools.GetThreadPool(Poolname=None, num_threads=3)
     elif Cluster:
-        pool = pools.GetGlobalClusterPool()
+        pool = nornir_pools.GetGlobalClusterPool()
     else:
-        pool = pools.GetGlobalMultithreadingPool()
+        pool = nornir_pools.GetGlobalMultithreadingPool()
 
 
     AngleMatchValues = list()
@@ -195,9 +192,9 @@ def FindBestAngle(imFixed, imWarped, AngleList, MinOverlap=0.75, SingleThread=Fa
     if not Cluster:
         temp_padded_fixed_memmap = core.CreateTemporaryReadonlyMemmapFile(PaddedFixed)
         temp_shared_warp_memmap = core.CreateTemporaryReadonlyMemmapFile(imWarped)
-        #SharedPaddedFixed = core.npArrayToReadOnlySharedArray(PaddedFixed)
-        #SharedWarped = core.npArrayToReadOnlySharedArray(imWarped)
-        #SharedPaddedFixed = np.save(PaddedFixed, )
+        # SharedPaddedFixed = core.npArrayToReadOnlySharedArray(PaddedFixed)
+        # SharedWarped = core.npArrayToReadOnlySharedArray(imWarped)
+        # SharedPaddedFixed = np.save(PaddedFixed, )
     else:
         SharedPaddedFixed = PaddedFixed
         SharedWarped = imWarped
@@ -248,7 +245,7 @@ def FindBestAngle(imFixed, imWarped, AngleList, MinOverlap=0.75, SingleThread=Fa
 
     # print str(AngleMatchValues)
     
-    #Delete the pool to ensure extra python threads do not stick around
+    # Delete the pool to ensure extra python threads do not stick around
     pool.wait_completion()
 
     del PaddedFixed
@@ -256,8 +253,8 @@ def FindBestAngle(imFixed, imWarped, AngleList, MinOverlap=0.75, SingleThread=Fa
     if not Cluster:
         os.remove(temp_padded_fixed_memmap.path)
         os.remove(temp_shared_warp_memmap.path)
-        #del SharedPaddedFixed
-        #del SharedWarped
+        # del SharedPaddedFixed
+        # del SharedWarped
 
     BestMatch = max(AngleMatchValues, key=nornir_imageregistration.AlignmentRecord.WeightKey)
     return BestMatch

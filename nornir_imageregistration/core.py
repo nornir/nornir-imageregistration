@@ -2,36 +2,34 @@
 scipy image arrays are indexed [y,x]
 '''
 
+import collections
 import ctypes
 import logging
 import math
 import multiprocessing
-import tempfile
+import multiprocessing.sharedctypes
 import os
+import tempfile
 
 from PIL import Image
+import nornir_imageregistration
+from nornir_imageregistration.spatial.rectangle import Rectangle
 import numpy.fft
+import scipy.misc
 import scipy.ndimage.measurements
 import scipy.stats
-import scipy.misc
-import nornir_shared.images as shared_images
 
 import matplotlib.pyplot as plt
-import nornir_imageregistration
+import nornir_shared.images as shared_images
 import numpy as np
 import numpy.fft.fftpack as fftpack
 import scipy.ndimage.interpolation as interpolation
-import multiprocessing.sharedctypes
 
 
-import collections
-from nornir_imageregistration.spatial.rectangle import Rectangle
-
-#In a remote process we need errors raised, otherwise we crash for the wrong reason and debugging is tougher. 
+# In a remote process we need errors raised, otherwise we crash for the wrong reason and debugging is tougher. 
 np.seterr(all='raise')
     
 # from memory_profiler import profile
-logger = logging.getLogger(__name__)
 
 class memmap_metadata(object):
     '''meta-data for a memmap array'''
@@ -53,7 +51,7 @@ class memmap_metadata(object):
         
     @mode.setter
     def mode(self, value):
-        #Default to copy-on-write
+        # Default to copy-on-write
         if value is None:
             self._mode = 'c'
             return
@@ -106,7 +104,7 @@ def array_distance(array):
     if array.ndim == 1:
         return np.sqrt(np.sum(array ** 2)) 
     
-    return np.sqrt(np.sum(array ** 2,1))
+    return np.sqrt(np.sum(array ** 2, 1))
     
 def GetBitsPerPixel(File): 
     return shared_images.GetImageBpp(File)
@@ -214,8 +212,8 @@ def ShowGrayscale(imageList, title=None):
     
     plt.tight_layout(pad=1.0)  
     plt.show()
-    #Do not call clf or we get two windows on the next call 
-    #plt.clf()
+    # Do not call clf or we get two windows on the next call 
+    # plt.clf()
     
 
 def ROIRange(start, count, maxVal, minVal=0):
@@ -280,6 +278,9 @@ def ResizeImage(image, scalar):
     
     return scipy.misc.imresize(image, np.array(new_size, dtype=np.int64), interp=interp)
 
+def CropImageRect(imageparam, bounding_rect, cval=None):
+    return CropImage(imageparam, Xo=int(bounding_rect[1]), Yo=int(bounding_rect[0]), Width=int(bounding_rect.Width), Height=int(bounding_rect.Height), cval=cval)
+
 def CropImage(imageparam, Xo, Yo, Width, Height, cval=None):
     '''
        Crop the image at the passed bounds and returns the cropped ndarray.
@@ -311,8 +312,8 @@ def CropImage(imageparam, Xo, Yo, Width, Height, cval=None):
     assert(isinstance(Width, int))
     assert(isinstance(Height, int))
     
-    image_rectangle = Rectangle([0,0,image.shape[0], image.shape[1]])
-    crop_rectangle = Rectangle.CreateFromPointAndArea([Yo,Xo], [Height, Width])
+    image_rectangle = Rectangle([0, 0, image.shape[0], image.shape[1]])
+    crop_rectangle = Rectangle.CreateFromPointAndArea([Yo, Xo], [Height, Width])
     
     overlap_rectangle = Rectangle.overlap_rect(image_rectangle, crop_rectangle)
     
@@ -343,13 +344,24 @@ def CropImage(imageparam, Xo, Yo, Width, Height, cval=None):
         (out_startY, out_startX) = overlap_rectangle.BottomLeft - crop_rectangle.BottomLeft 
         (out_endY, out_endX) = np.array([out_startY, out_startX]) + overlap_rectangle.Size
         
-    #Create mask
+    #To correct a numpy warning, convert values to int
+    in_startX = int(in_startX)
+    in_startY = int(in_startY)
+    in_endX = int(in_endX)
+    in_endY = int(in_endY)
+    
+    out_startX = int(out_startX)
+    out_startY = int(out_startY)
+    out_endX = int(out_endX)
+    out_endY = int(out_endY)
+    
+    # Create mask
     rMask = None
     if cval == 'random':
         rMask = np.zeros((Height, Width), dtype=np.bool)
         rMask[out_startY:out_endY, out_startX:out_endX] = True
         
-    #Create output image
+    # Create output image
     cropped = None
     if cval is None:
         cropped = np.zeros((Height, Width), dtype=image.dtype)
@@ -381,7 +393,7 @@ def CreateTemporaryReadonlyMemmapFile(npArray):
     memImage[:] = npArray[:]
     memImage.flush()
     del memImage
-    #np.save(TempFullpath, npArray)
+    # np.save(TempFullpath, npArray)
     return memmap_metadata(path=TempFullpath, shape=npArray.shape, dtype=npArray.dtype)
 
 
@@ -389,7 +401,7 @@ def GenRandomData(height, width, mean, standardDev):
     '''
     Generate random data of shape with the specified mean and standard deviation
     '''
-    image = (np.random.randn(height, width).astype(np.float32) * standardDev) + mean
+    image = (np.random.randn(int(height), int(width)).astype(np.float32) * standardDev) + mean
 
     if mean - (standardDev * 2) < 0:
         image = abs(image)
@@ -434,6 +446,9 @@ def ForceGrayscale(image):
 
 def _Image_To_Uint8(image):
     '''Converts image to uint8.  If input image uses floating point the image is scaled to the range 0-255'''
+    if image.dtype == np.uint8:
+        return image
+    
     if image.dtype == np.float32 or image.dtype == np.float16 or image.dtype == np.float64:
         image = image * 255.0
 
@@ -441,7 +456,7 @@ def _Image_To_Uint8(image):
         image = image.astype(np.uint8) * 255
     else:
         image = image.astype(np.uint8)
-        
+
     return image
 
 def SaveImage(ImageFullPath, image, **kwargs):
@@ -449,22 +464,25 @@ def SaveImage(ImageFullPath, image, **kwargs):
 
     (root, ext) = os.path.splitext(ImageFullPath)
     if ext == '.jp2':
-        SaveImage_JPeg2000(ImageFullPath, image,  **kwargs)
+        SaveImage_JPeg2000(ImageFullPath, image, **kwargs)
     elif ext == '.npy':
         np.save(ImageFullPath, image)
     else:
         Uint8_image = _Image_To_Uint8(image)
         del image
-        
+
         im = Image.fromarray(Uint8_image)
-        im.save(ImageFullPath)
-    
+        
+        if ext == '.png':
+            im.save(ImageFullPath, compress_level=0)
+        else:
+            im.save(ImageFullPath)
 
 def SaveImage_JPeg2000(ImageFullPath, image, tile_dim=None):
     '''Saves the image as greyscale with no contrast-stretching'''
     
     if tile_dim is None:
-        tile_dim = (512,512)
+        tile_dim = (512, 512)
         
     Uint8_image = _Image_To_Uint8(image)
     del image
@@ -519,6 +537,8 @@ def LoadImage(ImageFullPath, ImageMaskFullPath=None, MaxDimension=None):
     :rtype: ndimage
     '''
     if(not os.path.isfile(ImageFullPath)):
+        
+        logger = logging.getLogger(__name__)
         logger.error('File does not exist: ' + ImageFullPath)
         return None
     
@@ -535,6 +555,7 @@ def LoadImage(ImageFullPath, ImageMaskFullPath=None, MaxDimension=None):
 
     if(not ImageMaskFullPath is None):
         if(not os.path.isfile(ImageMaskFullPath)):
+            logger = logging.getLogger(__name__)
             logger.error('Fixed image mask file does not exist: ' + ImageMaskFullPath)
         else:
             image_mask = _LoadImageByExtension(ImageMaskFullPath, bpp=1)
@@ -579,10 +600,10 @@ def ImageToTiles(source_image, tile_size, grid_shape=None, cval=0):
     :param object cval: Fill value for images that are padded.  Default is zero.  Use 'random' to generate random noise
     :return: Dictionary of images indexed by tuples
     '''    
-    #Build the output dictionary
+    # Build the output dictionary
     grid = {}
     for (iRow, iCol, tile) in ImageToTilesGenerator(source_image, tile_size):
-        grid[iRow,iCol] = tile
+        grid[iRow, iCol] = tile
         
     return grid  
 
@@ -600,7 +621,7 @@ def ImageToTilesGenerator(source_image, tile_size, grid_shape=None, cval=0):
     
     source_image_padded = CropImage(source_image, Xo=0, Yo=0, Width=int(math.ceil(required_shape[1])), Height=int(math.ceil(required_shape[0])), cval=0)
     
-    #Build the output dictionary
+    # Build the output dictionary
     StartY = 0 
     EndY = tile_size[0]
     
@@ -610,7 +631,7 @@ def ImageToTilesGenerator(source_image, tile_size, grid_shape=None, cval=0):
         EndX = tile_size[1]
     
         for iCol in range(0, int(grid_shape[1])):
-            yield (iRow, iCol, source_image_padded[StartY:EndY,StartX:EndX])
+            yield (iRow, iCol, source_image_padded[StartY:EndY, StartX:EndX])
         
             StartX += tile_size[1]
             EndX += tile_size[1]    
@@ -625,7 +646,7 @@ def GetImageTile(source_image, iRow, iCol, tile_size):
     StartX = tile_size[1] * iCol
     EndX = StartX + tile_size[1]
     
-    return source_image[StartY:EndY,StartX:EndX]
+    return source_image[StartY:EndY, StartX:EndX]
 
 
 def RandomNoiseMask(image, Mask, ImageMedian=None, ImageStdDev=None, Copy=False):
@@ -657,7 +678,7 @@ def RandomNoiseMask(image, Mask, ImageMedian=None, ImageStdDev=None, Copy=False)
    
     Image1D = MaskedImage.flat
     
-    #iUnmasked = numpy.logical_not(iMasked)
+    # iUnmasked = numpy.logical_not(iMasked)
     if(ImageMedian is None or ImageStdDev is None):
         # Create masked array for accurate stats
         
@@ -668,8 +689,8 @@ def RandomNoiseMask(image, Mask, ImageMedian=None, ImageStdDev=None, Copy=False)
             else:
                 raise ValueError("All but %d pixels are masked, cannot calculate standard deviation" % ())
          
-        #Bit of a backward convention here.
-        #Need to use float64 so that sum does not return an infinite value
+        # Bit of a backward convention here.
+        # Need to use float64 so that sum does not return an infinite value
         UnmaskedImage1D = np.ma.masked_array(Image1D, iMasked, dtype=numpy.float64)
          
         if(ImageMedian is None):
@@ -802,10 +823,10 @@ def PadImageForPhaseCorrelation(image, MinOverlap=.05, ImageMedian=None, ImageSt
         if(ImageStdDev is None):
             ImageStdDev = np.std(Image1D)
 
-    PaddedImage = np.zeros((NewHeight, NewWidth), dtype=np.float16)
+    PaddedImage = np.zeros((int(NewHeight), int(NewWidth)), dtype=np.float16)
 
-    PaddedImageXOffset = np.floor((NewWidth - Width) / 2.0)
-    PaddedImageYOffset = np.floor((NewHeight - Height) / 2.0)
+    PaddedImageXOffset = int(np.floor((NewWidth - Width) / 2.0))
+    PaddedImageYOffset = int(np.floor((NewHeight - Height) / 2.0))
 
     # Copy image into padded image
     PaddedImage[PaddedImageYOffset:PaddedImageYOffset + Height, PaddedImageXOffset:PaddedImageXOffset + Width] = image[:, :]

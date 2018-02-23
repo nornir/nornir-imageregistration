@@ -6,14 +6,14 @@ Created on Oct 18, 2012
 
 import math
 
+from nornir_imageregistration.transforms import triangulation
 import numpy
 import scipy.interpolate
-import nornir_pools
 
-from nornir_imageregistration.transforms import triangulation
-import scipy.linalg as linalg
-import scipy.spatial as spatial
-import nornir_shared
+import nornir_pools
+#import nornir_shared
+import scipy.linalg 
+import scipy.spatial
 
 
 class RBFWithLinearCorrection(triangulation.Triangulation):
@@ -49,17 +49,26 @@ class RBFWithLinearCorrection(triangulation.Triangulation):
 
         self._Weights = self.CalculateRBFWeights(WarpedPoints, FixedPoints, self.BasisFunction)
 
+    def OnPointsAddedToTransform(self, new_points):
+        '''Update our data structures to account for added control points'''
+        super(RBFWithLinearCorrection, self).OnPointsAddedToTransform(new_points)
+        self._Weights = self.CalculateRBFWeights(self.WarpedPoints, self.FixedPoints, self.BasisFunction)
+
     def _GetMatrixWeightSums(self, Points, FixedPoints, WarpedPoints, MaxChunkSize=65536):
         NumCtrlPts = len(FixedPoints)
         NumPts = Points.shape[0]
 
         # This calculation has an NumPoints X NumWarpedPoints memory footprint when there are a large number of points
         if NumPts <= MaxChunkSize:
-            Distances = spatial.distance.cdist(Points, WarpedPoints)
+            Distances = scipy.spatial.distance.cdist(Points, WarpedPoints)
 
             # VectorBasisFunc = numpy.vectorize( self.BasisFunction)
             # FuncValues = VectorBasisFunc(Distances)
-            FuncValues = numpy.multiply(numpy.power(Distances, 2), numpy.log(Distances))
+
+            #We have to check for zeros so we don't crash if the transformed point exactly matches our control point
+            nonzero = Distances != 0
+            FuncValues = numpy.zeros(Distances.shape)
+            FuncValues[nonzero] = numpy.multiply(numpy.power(Distances[nonzero], 2.0), numpy.log(Distances[nonzero]))
 
             del Distances
 
@@ -96,8 +105,7 @@ class RBFWithLinearCorrection(triangulation.Triangulation):
 
     def Transform(self, Points, **kwargs):
 
-        if not isinstance(Points, numpy.ndarray):
-            Points = numpy.array(Points)
+        Points = self.EnsurePointsAre2DNumpyArray(Points)
 
         NumCtrlPts = len(self.FixedPoints)
 
@@ -178,7 +186,7 @@ class RBFWithLinearCorrection(triangulation.Triangulation):
             iPointA = iRow - 3
 
             p = Points[list(range((iPointA + 1), NumPts))]
-            dList = spatial.distance.cdist([Points[iPointA]], p)
+            dList = scipy.spatial.distance.cdist([Points[iPointA]], p)
 
 
             valueList = numpy.power(dList, 2)
@@ -190,7 +198,7 @@ class RBFWithLinearCorrection(triangulation.Triangulation):
 
 #            for iCol in range(iPointA+1, NumPts):
 #                iPointB = iCol
-#                dist = spatial.distance.euclidean(Points[iPointA], Points[iPointB])
+#                dist = scipy.spatial.distance.euclidean(Points[iPointA], Points[iPointB])
 #                value = BasisFunction(dist)
 #                BetaMatrix[iRow, iCol] = value
 #                BetaMatrix[iCol + 3, iRow - 3] = value
@@ -212,9 +220,9 @@ class RBFWithLinearCorrection(triangulation.Triangulation):
         (SolutionMatrix_X, SolutionMatrix_Y) = RBFWithLinearCorrection.CreateSolutionMatricies(ControlPoints)
 
         thread_pool = nornir_pools.GetGlobalThreadPool()
-        
-        Y_Task = thread_pool.add_task("WeightsY", linalg.solve, BetaMatrix, SolutionMatrix_Y)
-        WeightsX = linalg.solve(BetaMatrix, SolutionMatrix_X)
+
+        Y_Task = thread_pool.add_task("WeightsY", scipy.linalg .solve, BetaMatrix, SolutionMatrix_Y)
+        WeightsX = scipy.linalg .solve(BetaMatrix, SolutionMatrix_X)
         WeightsY = Y_Task.wait_return()
 
         return numpy.hstack([WeightsX, WeightsY])

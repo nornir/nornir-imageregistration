@@ -4,20 +4,20 @@ Created on Jun 26, 2012
 @author: James Anderson
 '''
 
-import sys
 from collections import deque
 import logging
 import multiprocessing
 import os
 import subprocess
+import sys
 
 import numpy
 from pylab import median, mean, std, sqrt, imread, ceil, floor, mod
+import scipy.misc
 import scipy.ndimage.measurements
 import scipy.stats
-import scipy.misc
 
-import nornir_pools as pools
+import nornir_pools
 import nornir_shared.histogram
 import nornir_shared.images as images
 import nornir_shared.prettyoutput as PrettyOutput
@@ -44,6 +44,16 @@ class ImageStats():
         self._median = None
         self._mean = None
         self._stddev = None
+
+    def __getstate__(self):
+        dict = {}
+        dict['_median'] = self._median 
+        dict['_mean'] = self._mean
+        dict['_stddev'] = self._stddev
+        return dict
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
     @classmethod
     def Create(cls, Image):
@@ -93,7 +103,7 @@ def __InvokeFunctionOnImageList__(listfilenames, Function=None, Pool=None, **kwa
        '''
 
     if Pool is None:
-        TPool = pools.GetGlobalMultithreadingPool()
+        TPool = nornir_pools.GetGlobalMultithreadingPool()
     else:
         TPool = Pool
 
@@ -103,7 +113,7 @@ def __InvokeFunctionOnImageList__(listfilenames, Function=None, Pool=None, **kwa
         task = TPool.add_task('Calc Feature Score: ' + os.path.basename(filename), Function, filename, **kwargs)
         task.filename = filename
         tasklist.append(task)
-        
+
     TPool.wait_completion()
 
     numTasks = len(tasklist)
@@ -132,14 +142,14 @@ def __PruneFileSciPy__(filename, MaxOverlap=0.15, **kwargs):
            MaxOverlap = 0 to 1'''
 
     # logger = logging.getLogger('irtools.prune')
-    #logger = multiprocessing.log_to_stderr()
+    # logger = multiprocessing.log_to_stderr()
 
     if MaxOverlap > 0.5:
         MaxOverlap = 0.5
 
     if not os.path.exists(filename):
-        #logger.error(filename + ' not found when attempting prune')
-        #PrettyOutput.LogErr(filename + ' not found when attempting prune')
+        # logger.error(filename + ' not found when attempting prune')
+        # PrettyOutput.LogErr(filename + ' not found when attempting prune')
         return None
 
     Im = core.LoadImage(filename)
@@ -214,7 +224,7 @@ def Histogram(filenames, Bpp=None, Scale=None, numBins=None):
     assert isinstance(listfilenames, list)
 
     FilenameToTask = {} 
-    local_machine_pool = pools.GetGlobalLocalMachinePool()
+    local_machine_pool = nornir_pools.GetGlobalLocalMachinePool()
     for f in listfilenames:
         (root, ext) = os.path.splitext(f)
         if ext == '.npy':
@@ -257,7 +267,7 @@ def Histogram(filenames, Bpp=None, Scale=None, numBins=None):
 
     threadTasks = []
      
-    thread_pool = pools.GetGlobalThreadPool()
+    thread_pool = nornir_pools.GetGlobalThreadPool()
     for f in list(OutputMap.keys()):
         threadTask = thread_pool.add_task(f, im_histogram_parser.Parse, OutputMap[f], minVal=minVal, maxVal=maxVal, numBins=numBins)
         threadTasks.append(threadTask)
@@ -272,7 +282,7 @@ def Histogram(filenames, Bpp=None, Scale=None, numBins=None):
 
     del threadTasks
 
-    # FilenameToResult = __InvokeFunctionOnImageList__(listfilenames, Function=__HistogramFileImageMagick__, Pool=Pools.GetGlobalThreadPool(), ProcPool = Pools.GetGlobalClusterPool(), Bpp=Bpp, Scale=Scale)#, NumSamples=SamplesPerImage)
+    # FilenameToResult = __InvokeFunctionOnImageList__(listfilenames, Function=__HistogramFileImageMagick__, Pool=nornir_pools.GetGlobalThreadPool(), ProcPool = nornir_pools.GetGlobalClusterPool(), Bpp=Bpp, Scale=Scale)#, NumSamples=SamplesPerImage)
 
 #    maxVal = 1 << Bpp
 #    numBins = 256
@@ -322,7 +332,7 @@ def __HistogramFileSciPy__(filename, Bpp=None, NumSamples=None, numBins=None, Sc
         if(Scale != 1.0):
             Im = scipy.misc.imresize(Im, size=Scale, interp='nearest') 
 
-    #ImOneD = reshape(Im, Width * Height, 1)
+    # ImOneD = reshape(Im, Width * Height, 1)
     ImOneD = Im.flat
 
     if Bpp is None:
@@ -347,15 +357,15 @@ def __HistogramFileSciPy__(filename, Bpp=None, NumSamples=None, numBins=None, Sc
         assert(isinstance(numBins, int))
 
     [histogram_array, low_range, binsize, extrapoints] = scipy.stats.histogram(ImOneD, numbins=numBins, defaultlimits=[0, 1])
-    
+
     histogram_obj = nornir_shared.histogram.Histogram.FromArray(histogram_array, low_range, binsize)
-    
+
     return histogram_obj
 
 def __CreateImageMagickCommandLineForHistogram(filename, Scale):
-    CmdTemplate = "convert %(filename)s -filter point -scale %(scale)g%% -define histogram:unique-colors=true -format %%c histogram:info:- && exit"
+    CmdTemplate = "magick convert %(filename)s -filter point -scale %(scale)g%% -define histogram:unique-colors=true -format %%c histogram:info:- && exit"
     return CmdTemplate % {'filename' : filename, 'scale' : Scale * 100}
-    
+
 
 def __HistogramFileImageMagick__(filename, ProcPool, Bpp=None, Scale=None):
 
@@ -375,7 +385,7 @@ def __HistogramFileImageMagick__(filename, ProcPool, Bpp=None, Scale=None):
     return task
 
 
-#if __name__ == '__main__':
+# if __name__ == '__main__':
 # 
 #     Histogram = Histogram('C:\\Buildscript\\IrTools\\RawTile.png')
 # 
